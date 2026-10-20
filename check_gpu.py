@@ -1,20 +1,12 @@
-#
+"""Проверка, что PyTorch видит видеокарту: python check_gpu.py"""
 import torch
 
-cuda = torch.cuda.is_available()
-print(cuda)
-
-# from tensorflow.python.client import device_lib
-# import tensorflow as tf
-# # sess = tf.compat.v1.Session(config=tf.compat.v1.ConfigProto(log_device_placement=True))
-# print(device_lib.list_local_devices())
-
-# import tensorflow as tf;
-# print(tf.config.list_physical_devices('GPU'))
-
-
-
-# from PIL import Image
-# import cv2
-# pil_image = Image.open('images/0_99.png').convert("RGB")
-# cv2.imwrite('data/img.png', pil_image)
+print("PyTorch:", torch.__version__)
+print("Сборка с CUDA:", torch.version.cuda or "нет (CPU-версия)")
+if torch.cuda.is_available():
+    props = torch.cuda.get_device_properties(0)
+    print(f"GPU: {props.name}, {props.total_memory / 1024 ** 3:.1f} ГБ")
+    x = torch.randn(1024, 1024, device="cuda")
+    print("Тест вычислений на GPU:", "OK" if torch.isfinite(x @ x).all() else "ошибка")
+else:
+    print("GPU недоступна — обучение пойдёт на CPU")

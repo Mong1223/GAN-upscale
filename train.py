@@ -18,12 +18,19 @@ torch.manual_seed(15)
 
 # Веса из pretrained/ обучены со старой (ошибочной) нормализацией и BatchNorm(eps=0.8),
 # с исправленной моделью они не совместимы — обучаем заново.
-load_pretrained_models = False
-pretrained_generator = "saved_models/generator_last.pth"
-pretrained_discriminator = "saved_models/discriminator_last.pth"
+# Все пути считаются от папки проекта, а не от текущей директории
+ROOT = os.path.dirname(os.path.abspath(__file__))
+dataset_path = os.path.join(ROOT, "data")
+images_dir = os.path.join(ROOT, "images")
+models_dir = os.path.join(ROOT, "saved_models")
 
-n_epochs = 10
-dataset_path = "data/"
+load_pretrained_models = False
+pretrained_generator = os.path.join(models_dir, "generator_last.pth")
+pretrained_discriminator = os.path.join(models_dir, "discriminator_last.pth")
+
+pretrain_epochs = 20  # предобучение генератора только на попиксельной ошибке (как SRResNet в статье SRGAN)
+n_epochs = 30         # затем обучение GAN
+pixel_weight = 1.0    # вес попиксельной ошибки в GAN-фазе — держит цвета (VGG-ошибка того же порядка)
 batch_size = 4
 lr = 0.0001
 b1 = 0.5
@@ -37,7 +44,7 @@ sample_interval = 200  # как часто (в батчах) сохранять 
 
 hr_shape = (hr_height, hr_width)
 
-# Изображения подаются в сеть в диапазоне [-1, 1] — это совпадает с выходом Tanh генератора
+# Изображения подаются в сеть в диапазоне [-1, 1]; выход генератора обрезается до того же диапазона
 mean = [0.5, 0.5, 0.5]
 std = [0.5, 0.5, 0.5]
 
@@ -118,14 +125,13 @@ class FeatureExtractor(nn.Module):
 
 
 class ResidualBlock(nn.Module):
+    # Без BatchNorm (как в EDSR): с ним генератор учился хуже бикубической интерполяции
     def __init__(self, in_features):
         super(ResidualBlock, self).__init__()
         self.conv_block = nn.Sequential(
             nn.Conv2d(in_features, in_features, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(in_features),
             nn.PReLU(),
             nn.Conv2d(in_features, in_features, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(in_features),
         )
 
     def forward(self, x):
@@ -146,21 +152,20 @@ class GeneratorResNet(nn.Module):
         self.res_blocks = nn.Sequential(*res_blocks)
 
         # Second conv layer post residual blocks
-        self.conv2 = nn.Sequential(nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1), nn.BatchNorm2d(64))
+        self.conv2 = nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1)
 
         # Upsampling layers (x2 * x2 = x4)
         upsampling = []
         for _ in range(2):
             upsampling += [
                 nn.Conv2d(64, 256, 3, 1, 1),
-                nn.BatchNorm2d(256),
                 nn.PixelShuffle(upscale_factor=2),
                 nn.PReLU(),
             ]
         self.upsampling = nn.Sequential(*upsampling)
 
-        # Final output layer: Tanh -> [-1, 1], тот же диапазон, что и у данных
-        self.conv3 = nn.Sequential(nn.Conv2d(64, out_channels, kernel_size=9, stride=1, padding=4), nn.Tanh())
+        # Final output layer: поправка к бикубическому увеличению, поэтому без Tanh
+        self.conv3 = nn.Conv2d(64, out_channels, kernel_size=9, stride=1, padding=4)
 
     def forward(self, x):
         out1 = self.conv1(x)
@@ -169,7 +174,9 @@ class GeneratorResNet(nn.Module):
         out = torch.add(out1, out2)
         out = self.upsampling(out)
         out = self.conv3(out)
-        return out
+        # Сеть предсказывает только детали поверх бикубического увеличения
+        base = F.interpolate(x, scale_factor=scale, mode="bicubic", align_corners=False)
+        return (base + out).clamp(-1, 1)
 
 
 class Discriminator(nn.Module):
@@ -226,17 +233,41 @@ def validate(generator, dataloader, device):
     return float(np.mean(values)) if values else float("nan")
 
 
+@torch.no_grad()
+def save_sample(imgs_lr, imgs_hr, gen_hr, epoch, batch_idx):
+    """Пример HR / LR (bicubic x4) / SR — в реальных цветах, без min-max нормализации."""
+    if batch_idx % sample_interval != 0:
+        return
+    lr_up = F.interpolate(imgs_lr[:1], scale_factor=scale, mode="bicubic", align_corners=False)
+    img_grid = torch.cat((denormalize(imgs_hr[:1]), denormalize(lr_up), denormalize(gen_hr[:1])), -1)
+    save_image(img_grid, os.path.join(images_dir, f"{epoch}_{batch_idx}.png"))
+
+
+def get_device():
+    """Проверка видеокарты перед обучением."""
+    if torch.cuda.is_available():
+        props = torch.cuda.get_device_properties(0)
+        print(f"GPU: {props.name}, {props.total_memory / 1024 ** 3:.1f} ГБ, CUDA {torch.version.cuda}")
+        return torch.device("cuda")
+    if torch.version.cuda is None:
+        print("ВНИМАНИЕ: установлен PyTorch без поддержки CUDA — обучение пойдёт на CPU и будет очень медленным.\n"
+              "Установите сборку с CUDA, см. README (раздел «Видеокарта»).")
+    else:
+        print("ВНИМАНИЕ: PyTorch собран с CUDA, но видеокарта не найдена — проверьте драйвер (nvidia-smi).")
+    return torch.device("cpu")
+
+
 def main():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    os.makedirs("images", exist_ok=True)
-    os.makedirs("saved_models", exist_ok=True)
+    device = get_device()
+    os.makedirs(images_dir, exist_ok=True)
+    os.makedirs(models_dir, exist_ok=True)
 
     train_pairs = find_pairs(os.path.join(dataset_path, "DIV2K_train_HR"),
                              os.path.join(dataset_path, f"DIV2K_train_LR_bicubic/X{scale}"))
     val_pairs = find_pairs(os.path.join(dataset_path, "DIV2K_valid_HR"),
                            os.path.join(dataset_path, f"DIV2K_valid_LR_bicubic/X{scale}"))
-    if not train_pairs:
-        raise SystemExit(f"Не найдены пары LR/HR в {dataset_path}")
+    if not train_pairs or not val_pairs:
+        raise SystemExit(f"Не найдены пары LR/HR для train или valid в {dataset_path}")
     print(f"train: {len(train_pairs)} пар, valid: {len(val_pairs)} пар")
 
     train_dataloader = DataLoader(ImageDataset(train_pairs, hr_shape, train=True),
@@ -252,6 +283,7 @@ def main():
     # Losses
     criterion_GAN = torch.nn.MSELoss()
     criterion_content = torch.nn.L1Loss()
+    criterion_pixel = torch.nn.L1Loss()
 
     if load_pretrained_models:
         generator.load_state_dict(torch.load(pretrained_generator, map_location=device))
@@ -263,9 +295,11 @@ def main():
 
     best_psnr = -float("inf")
 
-    for epoch in range(n_epochs):
+    for epoch in range(pretrain_epochs + n_epochs):
+        pretrain = epoch < pretrain_epochs
         gen_loss, disc_loss = 0, 0
-        tqdm_bar = tqdm(train_dataloader, desc=f'Training Epoch {epoch} ', total=len(train_dataloader))
+        phase = "Pretrain" if pretrain else "GAN"
+        tqdm_bar = tqdm(train_dataloader, desc=f'{phase} Epoch {epoch} ', total=len(train_dataloader))
         for batch_idx, imgs in enumerate(tqdm_bar):
             imgs_lr = imgs["lr"].to(device)
             imgs_hr = imgs["hr"].to(device)
@@ -279,6 +313,16 @@ def main():
 
             # Generate a high resolution image from low resolution input
             gen_hr = generator(imgs_lr)
+            loss_pixel = criterion_pixel(gen_hr, imgs_hr)
+
+            if pretrain:
+                # Без дискриминатора и VGG: сначала генератор учится восстанавливать цвета и форму
+                loss_pixel.backward()
+                optimizer_G.step()
+                gen_loss += loss_pixel.item()
+                tqdm_bar.set_postfix(pixel_loss=gen_loss / (batch_idx + 1))
+                save_sample(imgs_lr, imgs_hr, gen_hr, epoch, batch_idx)
+                continue
 
             # Adversarial loss
             loss_GAN = criterion_GAN(discriminator(gen_hr), valid)
@@ -289,7 +333,7 @@ def main():
             loss_content = criterion_content(gen_features, real_features)
 
             # Total loss
-            loss_G = loss_content + 1e-3 * loss_GAN
+            loss_G = loss_content + 1e-3 * loss_GAN + pixel_weight * loss_pixel
             loss_G.backward()
             optimizer_G.step()
 
@@ -307,21 +351,19 @@ def main():
             disc_loss += loss_D.item()
             tqdm_bar.set_postfix(gen_loss=gen_loss / (batch_idx + 1), disc_loss=disc_loss / (batch_idx + 1))
 
-            # Пример HR / LR (bicubic x4) / SR — в реальных цветах, без min-max нормализации
-            if batch_idx % sample_interval == 0:
-                with torch.no_grad():
-                    lr_up = F.interpolate(imgs_lr[:1], scale_factor=scale, mode="bicubic", align_corners=False)
-                    img_grid = torch.cat((denormalize(imgs_hr[:1]), denormalize(lr_up), denormalize(gen_hr[:1])), -1)
-                save_image(img_grid, f"images/{epoch}_{batch_idx}.png")
+            save_sample(imgs_lr, imgs_hr, gen_hr, epoch, batch_idx)
 
         # Чекпоинты: последняя модель и лучшая по PSNR на валидации
-        torch.save(generator.state_dict(), "saved_models/generator_last.pth")
-        torch.save(discriminator.state_dict(), "saved_models/discriminator_last.pth")
+        torch.save(generator.state_dict(), os.path.join(models_dir, "generator_last.pth"))
+        torch.save(discriminator.state_dict(), os.path.join(models_dir, "discriminator_last.pth"))
         val_psnr = validate(generator, val_dataloader, device)
-        print(f"Epoch {epoch}: val PSNR = {val_psnr:.2f} dB")
-        if val_psnr > best_psnr:
+        print(f"Epoch {epoch} ({phase}): val PSNR = {val_psnr:.2f} dB")
+        if pretrain:
+            # Итог предобучения хранится отдельно: в GAN-фазе PSNR обычно немного падает — это нормально
+            torch.save(generator.state_dict(), os.path.join(models_dir, "generator_pretrain.pth"))
+        elif val_psnr > best_psnr:
             best_psnr = val_psnr
-            torch.save(generator.state_dict(), "saved_models/generator_best.pth")
+            torch.save(generator.state_dict(), os.path.join(models_dir, "generator_best.pth"))
 
 
 if __name__ == '__main__':

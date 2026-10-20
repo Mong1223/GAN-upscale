@@ -16,11 +16,12 @@ from keras.models import Model
 from keras.layers import Input, Conv2D, MaxPooling2D, UpSampling2D, concatenate
 from keras.optimizers import Adam
 
-gr_dir = "res/gr/"
-hr_dir = "res/hr/"
-out_dir = "res/UNET/"
-hr_test_dir = "res/hr_test/"   # эталоны только тестовой части — для evaluate.py
-model_path = "saved_models/unet.h5"
+ROOT = os.path.dirname(os.path.abspath(__file__))
+gr_dir = os.path.join(ROOT, "res", "gr")
+hr_dir = os.path.join(ROOT, "res", "hr")
+out_dir = os.path.join(ROOT, "res", "UNET")
+hr_test_dir = os.path.join(ROOT, "res", "hr_test")   # эталоны только тестовой части — для evaluate.py
+model_path = os.path.join(ROOT, "saved_models", "unet.h5")
 test_fraction = 0.2
 epochs = 500
 load_use = False   # старая saved_models/unet.h5 обучалась на тестовых картинках — не использовать

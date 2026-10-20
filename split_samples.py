@@ -5,8 +5,9 @@
 import cv2
 import os
 
-image_dir = "images"
-out_dirs = ["res/hr", "res/lr", "res/gr"]   # порядок панелей в images/
+ROOT = os.path.dirname(os.path.abspath(__file__))
+image_dir = os.path.join(ROOT, "images")
+out_dirs = [os.path.join(ROOT, "res", d) for d in ("hr", "lr", "gr")]   # порядок панелей в images/
 for d in out_dirs:
     os.makedirs(d, exist_ok=True)
 

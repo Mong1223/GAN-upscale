@@ -76,34 +76,58 @@ data/DIV2K_valid_LR_bicubic/X4/ 0801x4.png … 0900x4.png
 ## Установка
 
 ### Версия Python
-| Часть | Python | Зависимости |
-|---|---|---|
-| GAN (`train.py`, `infer.py`, `evaluate.py`, `filter_images.py`) | 3.10–3.14 | `requirements.txt` |
-| U-Net и Pixel MLP (`unet.py`, `pixel_mlp_*.py`) | 3.10–3.13 (TensorFlow ещё не поддерживает 3.14) | `requirements-unet.txt` |
+Проект состоит из двух независимых частей на разных библиотеках, и у них разные требования к Python:
 
-Чтобы всё работало в одном окружении, используйте Python 3.12.
+| Часть | Библиотека | Python | Зависимости |
+|---|---|---|---|
+| GAN (`train.py`, `infer.py`, `evaluate.py`, `filter_images.py`) | PyTorch | 3.10–3.14 | `requirements.txt` |
+| U-Net и Pixel MLP (`unet.py`, `pixel_mlp_*.py`) | TensorFlow / Keras | 3.10–3.13 | `requirements-unet.txt` |
 
-### 1. PyTorch с поддержкой видеокарты
+**Почему зависимости разделены.** TensorFlow выпускает сборки под новую версию Python позже, чем PyTorch: на момент написания для Python 3.14 есть только предварительная версия (`2.22.0rc0`), а такие pip по умолчанию не устанавливает. Если бы TensorFlow был в общем `requirements.txt`, установка на Python 3.14 падала бы целиком — хотя для основной части проекта (GAN) он не нужен. Поэтому TensorFlow вынесен в отдельный `requirements-unet.txt`.
+
+Варианты:
+- **Нужен только GAN** — подойдёт любой Python 3.10–3.14, ставьте `requirements.txt`.
+- **Нужен ещё и U-Net** — создайте окружение на Python 3.12: на нём ставятся и PyTorch с CUDA, и TensorFlow, так что хватит одного окружения.
+
+### 1. Виртуальное окружение
+Только GAN (например, на Python 3.14), Windows PowerShell:
+```bash
+python -m venv venv
+venv\Scripts\activate
+```
+GAN + U-Net — окружение на Python 3.12. Если Python 3.12 установлен с python.org:
+```bash
+py -3.12 -m venv venv312
+venv312\Scripts\activate
+```
+Или через Anaconda:
+```bash
+conda create -n gan-upscale python=3.12
+conda activate gan-upscale
+```
+Какие версии Python установлены, показывает `py -0`. Папки `venv/` и `.venv/` уже в `.gitignore`.
+
+### 2. PyTorch с поддержкой видеокарты
 Обучать на CPU не имеет смысла — нужна NVIDIA GPU и PyTorch, собранный с CUDA. Обычный `pip install torch` на Windows ставит CPU-версию, поэтому сначала:
 ```bash
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 ```
 
-### 2. Остальные зависимости
+### 3. Остальные зависимости
 ```bash
 pip install -r requirements.txt
 ```
-Для U-Net и Pixel MLP дополнительно нужен TensorFlow (Python не новее 3.13):
+Для U-Net и Pixel MLP — вместо этого (включает `requirements.txt` и добавляет TensorFlow):
 ```bash
 pip install -r requirements-unet.txt
 ```
 
-### 3. Проверка видеокарты
+### 4. Проверка видеокарты
 ```bash
 python check_gpu.py
 ```
 Ожидаемый вывод — `Сборка с CUDA: 12.6`, имя видеокарты и `Тест вычислений на GPU: OK`.
-- `Сборка с CUDA: нет` — установлена CPU-версия PyTorch, переустановите командой из шага 1.
+- `Сборка с CUDA: нет` — установлена CPU-версия PyTorch, переустановите командой из шага 2.
 - Сборка с CUDA есть, но GPU не найдена — проверьте драйвер командой `nvidia-smi`.
 
 `train.py` при старте тоже печатает, на чём идёт обучение (`GPU: ...`), и предупреждает, если видеокарта недоступна.
@@ -149,6 +173,19 @@ python split_samples.py    # нарезка на res/hr, res/lr, res/gr
 python unet.py             # обучение U-Net, результат на тестовой части в res/UNET
 python evaluate.py --hr res/hr_test --sr res/UNET
 ```
+
+## Частые ошибки при установке
+**`ERROR: Could not find a version that satisfies the requirement tensorflow>=2.12 (from versions: 2.22.0rc0)`**
+Вы ставите TensorFlow на Python 3.14, а для него есть только предварительная версия. Для GAN TensorFlow не нужен — ставьте `requirements.txt`. Для U-Net создайте окружение на Python 3.12 (см. «Виртуальное окружение»).
+
+**`check_gpu.py` пишет `Сборка с CUDA: нет`**
+PyTorch установился из обычного PyPI, а там для Windows только CPU-версия. Так бывает, если `requirements.txt` поставили раньше шага 2. Переустановите:
+```bash
+pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu126
+```
+
+**`Could not find a version that satisfies the requirement torch` при установке с `--index-url .../cu124`**
+В старых индексах CUDA (cu124 и ниже) нет сборок под новые версии Python. Используйте `cu126` или новее.
 
 ## Результаты
 После короткого тестового обучения (3 эпохи предобучения + 2 эпохи GAN) на 5 полноразмерных валидационных картинках:

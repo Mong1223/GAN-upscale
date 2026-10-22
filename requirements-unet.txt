@@ -1,0 +1,3 @@
+# Для unet.py и pixel_mlp_*.py: TensorFlow, Python 3.10–3.13
+-r requirements.txt
+tensorflow>=2.12

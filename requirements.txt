@@ -1,9 +1,8 @@
-torch>=2.0        # с CUDA: см. README, раздел «Видеокарта»
+# Основная часть (GAN): Python 3.10–3.14
+torch>=2.0        # с CUDA: см. README, раздел «Установка»
 torchvision>=0.15
 torchmetrics>=1.0
 numpy
 pillow
 opencv-python
 tqdm
-# только для U_net.py
-tensorflow>=2.12

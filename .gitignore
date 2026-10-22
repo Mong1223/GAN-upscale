@@ -3,3 +3,5 @@ images/
 res/
 saved_models/*.pth
 __pycache__/
+venv/
+.venv/

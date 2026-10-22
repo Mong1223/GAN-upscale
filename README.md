@@ -20,7 +20,8 @@ GAN-upscale/
 ├── pixel_mlp_rgb.py       # ранний эксперимент (Keras): сеть по окрестности 3×3 пикселя, RGB целиком
 ├── pixel_mlp_channels.py  # то же, по каждому каналу отдельно
 ├── check_gpu.py           # проверка, видит ли PyTorch видеокарту
-├── requirements.txt
+├── requirements.txt       # зависимости GAN
+├── requirements-unet.txt  # + TensorFlow для U-Net и Pixel MLP
 ├── data/                  # датасет DIV2K (не в git, см. «Данные»)
 ├── images/                # примеры HR | LR | SR, сохраняемые во время обучения (не в git)
 ├── res/                   # результаты infer.py, split_samples.py, unet.py (не в git)
@@ -74,6 +75,14 @@ data/DIV2K_valid_LR_bicubic/X4/ 0801x4.png … 0900x4.png
 
 ## Установка
 
+### Версия Python
+| Часть | Python | Зависимости |
+|---|---|---|
+| GAN (`train.py`, `infer.py`, `evaluate.py`, `filter_images.py`) | 3.10–3.14 | `requirements.txt` |
+| U-Net и Pixel MLP (`unet.py`, `pixel_mlp_*.py`) | 3.10–3.13 (TensorFlow ещё не поддерживает 3.14) | `requirements-unet.txt` |
+
+Чтобы всё работало в одном окружении, используйте Python 3.12.
+
 ### 1. PyTorch с поддержкой видеокарты
 Обучать на CPU не имеет смысла — нужна NVIDIA GPU и PyTorch, собранный с CUDA. Обычный `pip install torch` на Windows ставит CPU-версию, поэтому сначала:
 ```bash
@@ -84,7 +93,10 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 ```bash
 pip install -r requirements.txt
 ```
-TensorFlow нужен только для `unet.py` и `pixel_mlp_*.py`. Если он не ставится на вашу версию Python, используйте для U-Net отдельное окружение с более старым Python (например, 3.12).
+Для U-Net и Pixel MLP дополнительно нужен TensorFlow (Python не новее 3.13):
+```bash
+pip install -r requirements-unet.txt
+```
 
 ### 3. Проверка видеокарты
 ```bash
